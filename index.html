@@ -18,7 +18,7 @@
   input{flex:1;min-width:0;background:#111;color:#eee;border:0;border-radius:8px;padding:12px;font-size:17px}
   button{background:#f60;color:#000;border:0;border-radius:8px;padding:0 16px;margin-left:8px;font-size:17px;font-weight:600}
   .t{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
-  #mic{background:#222;color:#eee;padding:0 12px;font-size:13px}#mic.on{background:#c00}
+  #mic{background:#222;color:#eee;padding:0 12px;font-size:13px;touch-action:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}#mic.on{background:#c00}
   dialog{margin:56px auto auto;background:#111;color:#eee;border:0;border-radius:12px;width:calc(100% - 32px);box-sizing:border-box;padding:16px}
   dialog::backdrop{background:#000a}textarea{width:100%;box-sizing:border-box;background:#000;color:#eee;border:0;border-radius:8px;padding:12px;font-family:inherit;font-size:15px;margin:8px 0;min-height:80px}
   dialog input{width:100%;box-sizing:border-box;background:#000}dialog button{padding:10px 16px}dialog menu{display:flex;justify-content:flex-end;padding:0;margin:0}
@@ -33,7 +33,7 @@
   <input id="tok" placeholder="github_pat_…" autocomplete="off"><button onclick="setTok()">Save</button>
 </div>
 <div id="list"></div>
-<form id="add" onsubmit="add(event)"><input id="title" placeholder="Add for today" autocomplete="off"><button type="button" id="mic" onclick="mic()" oncontextmenu="lang();return false">🎤</button><button>Add</button></form>
+<form id="add" onsubmit="add(event)"><input id="title" placeholder="Add for today" autocomplete="off"><button type="button" id="mic" onpointerdown="talk(event)" onpointerup="hush()" onpointercancel="hush()" oncontextmenu="return false">🎤 EN</button><button>Add</button></form>
 <dialog id="edit"><form method="dialog"><input id="et" autocomplete="off"><textarea id="en" placeholder="Notes"></textarea><menu><button value="" style="background:#222;color:#eee">Cancel</button><button value="ok">Save</button></menu></form></dialog>
 <script>
 const API = 'https://api.github.com/repos/AlexBanh-Studio/focus-data/contents/tasks.json';
@@ -92,19 +92,26 @@ function add(e) {
   const t = { id: crypto.randomUUID().toUpperCase(), title, notes: '', quadrant: '1-1', project: '', day: day(), recurring: false, waiting: false, done: false, createdAt: now(), source: 'mobile' };
   commit(ts => ts.push({ ...t }));
 }
-// Chrome on Android sends this to Google's speech recognizer. Tap = dictate into the field, hold = switch English/French.
+// Chrome on Android sends this to Google's speech recognizer. Hold = talk, words land in the field on release; quick tap = switch English/French.
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-let rec;
-function mic() {
-  if (rec) return rec.stop();
+let rec, downAt;
+const micLabel = () => { $('mic').textContent = '🎤 ' + (localStorage.lang || 'en-US').slice(0, 2).toUpperCase(); };
+function talk(e) {
+  e.preventDefault(); downAt = Date.now();
   rec = new SR(); rec.lang = localStorage.lang || 'en-US'; rec.interimResults = true; rec.continuous = true;
   const before = $('title').value.trim() ? $('title').value.trim() + ' ' : '';
-  rec.onresult = e => { const s = [...e.results].map(r => r[0].transcript).join(''); $('title').value = before + s.charAt(0).toUpperCase() + s.slice(1); };
-  rec.onerror = e => status('Mic: ' + e.error);
-  rec.onend = () => { rec = null; $('mic').classList.remove('on'); };
-  rec.start(); $('mic').classList.add('on'); status('Listening (' + rec.lang.slice(0, 2).toUpperCase() + ')… tap 🎤 to stop');
+  rec.onresult = e => { const s = [...e.results].map(r => r[0].transcript).join('').trim(); $('title').value = before + s.charAt(0).toUpperCase() + s.slice(1); };
+  rec.onerror = e => { if (e.error !== 'aborted' && e.error !== 'no-speech') status('Mic: ' + e.error); };
+  rec.onend = () => { $('mic').classList.remove('on'); };
+  rec.start(); $('mic').classList.add('on'); status('Listening… let go when done');
 }
-function lang() { localStorage.lang = localStorage.lang === 'fr-BE' ? 'en-US' : 'fr-BE'; status('Voice: ' + localStorage.lang); }
+function hush() {
+  if (!rec) return;
+  if (Date.now() - downAt < 300) { rec.abort(); localStorage.lang = localStorage.lang === 'fr-BE' ? 'en-US' : 'fr-BE'; micLabel(); status('Voice: ' + localStorage.lang); }
+  else { rec.stop(); status('Synced ' + new Date().toTimeString().slice(0, 5)); }   // stop() still delivers the last words
+  rec = null;
+}
+micLabel();
 if (!SR) $('mic').style.display = 'none';
 // Hold a task (Android fires contextmenu on long press) to edit its title and notes.
 let editing;
