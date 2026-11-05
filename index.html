@@ -64,7 +64,7 @@ async function flush() {
   if (busy || !pending.length || !tok) return;
   busy = true; const n = pending.length;
   try {
-    const j = await gh('PUT', { message: 'Focus mobile: update ' + now().slice(0, 16).replace('T', ' '), content: b64(ser(tasks)), sha });
+    const j = await gh('PUT', { message: 'Focus mobile: update ' + new Date(Date.now() - new Date().getTimezoneOffset() * 6e4).toISOString().slice(0, 16).replace('T', ' '), content: b64(ser(tasks)), sha });
     sha = j.content.sha; pending.splice(0, n); status('Synced ' + new Date().toTimeString().slice(0, 5));
   } catch (e) {
     if (/40[134]/.test(e.message)) { fail(e); busy = false; return; }
