@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>Focus</title>
+<style>
+  body{margin:0;background:#000;color:#eee;font:17px/1.4 -apple-system,Roboto,system-ui,sans-serif;padding:32px 16px 96px}
+  h1{font-size:13px;font-weight:400;color:#777;margin:22px 0 4px;letter-spacing:.06em;text-transform:uppercase}
+  .t{display:flex;gap:14px;padding:12px 0;border-bottom:1px solid #1a1a1a;font-size:22px;align-items:flex-start}
+  .t .c{flex:none;width:24px;height:24px;border:2px solid #555;border-radius:50%;margin-top:5px}
+  .t.done{color:#555;font-size:17px}.t.done .c{border-color:#333;background:#333;margin-top:2px}
+  .n{font-size:14px;color:#888}
+  #status{position:fixed;top:0;left:0;right:0;padding:6px 16px;font-size:12px;color:#666;background:#000}
+  #add{position:fixed;bottom:0;left:0;right:0;display:flex;margin:0;padding:10px 16px calc(10px + env(safe-area-inset-bottom));background:#000;border-top:1px solid #1a1a1a}
+  input{flex:1;min-width:0;background:#111;color:#eee;border:0;border-radius:8px;padding:12px;font-size:17px}
+  button{background:#f60;color:#000;border:0;border-radius:8px;padding:0 16px;margin-left:8px;font-size:17px;font-weight:600}
+  #setup{display:none;padding:8px 0}#setup input{width:100%;box-sizing:border-box;margin:8px 0}
+</style>
+</head>
+<body>
+<div id="status">…</div>
+<div id="setup">
+  <h1>Token</h1>
+  <p class="n">A GitHub fine-grained token with Contents read/write on AlexBanh-Studio/focus-data. Stays on this phone.</p>
+  <input id="tok" placeholder="github_pat_…" autocomplete="off"><button onclick="setTok()">Save</button>
+</div>
+<div id="list"></div>
+<form id="add" onsubmit="add(event)"><input id="title" placeholder="Add for today" autocomplete="off"><button>Add</button></form>
+<script>
+const API = 'https://api.github.com/repos/AlexBanh-Studio/focus-data/contents/tasks.json';
+const BLOCKS = ['Morning', 'Midday', 'Afternoon', 'Evening'];
+let tok = localStorage.tok, tasks = [], sha = '', pending = [], busy = false;
+const hash = location.hash.match(/^#t=(.+)/);
+if (hash) { tok = localStorage.tok = hash[1]; history.replaceState(null, '', location.pathname); }
+const $ = id => document.getElementById(id);
+const day = (d = new Date()) => new Date(d - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 10);
+const now = () => new Date().toISOString().replace(/\.\d+/, '');
+const isToday = t => (t.day && t.day <= day()) || (t.due && t.due <= day());
+// ser-start: same bytes as the Mac app writes (sorted keys, "key" : value, 2-space indent), so git diffs stay small
+const ser = a => '[\n' + a.map(t => '  {\n' + Object.keys(t).sort().map(k => '    "' + k + '" : ' + JSON.stringify(t[k])).join(',\n') + '\n  }').join(',\n') + '\n]';
+// ser-end
+const b64 = s => { const b = new TextEncoder().encode(s); let r = ''; for (let i = 0; i < b.length; i += 8192) r += String.fromCharCode(...b.subarray(i, i + 8192)); return btoa(r); };
+const unb64 = s => new TextDecoder().decode(Uint8Array.from(atob(s.replace(/\n/g, '')), c => c.charCodeAt(0)));
+const esc = s => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const status = s => { $('status').textContent = s; };
+
+async function gh(method, body) {
+  const r = await fetch(API, { method, headers: { Authorization: 'Bearer ' + tok, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' }, body: body && JSON.stringify(body) });
+  if (!r.ok) throw new Error(method + ' ' + r.status);
+  return r.json();
+}
+async function load() {
+  status('Loading…');
+  const j = await gh('GET');
+  sha = j.sha; tasks = JSON.parse(unb64(j.content));
+  pending.forEach(f => f(tasks));   // edits not yet saved, re-applied on the fresh copy
+  render(); status('Synced ' + new Date().toTimeString().slice(0, 5));
+}
+function fail(e) { status(e.message); if (/40[134]/.test(e.message)) { delete localStorage.tok; tok = ''; $('setup').style.display = 'block'; } }
+async function flush() {
+  if (busy || !pending.length || !tok) return;
+  busy = true; const n = pending.length;
+  try {
+    const j = await gh('PUT', { message: 'Focus mobile: update ' + now().slice(0, 16).replace('T', ' '), content: b64(ser(tasks)), sha });
+    sha = j.content.sha; pending.splice(0, n); status('Synced ' + new Date().toTimeString().slice(0, 5));
+  } catch (e) {
+    if (/40[134]/.test(e.message)) { fail(e); busy = false; return; }
+    status('Retrying… ' + e.message);           // someone else saved first: reload, re-apply, try again
+    try { await load(); } catch (e2) { fail(e2); }
+  }
+  busy = false;
+  if (pending.length) setTimeout(flush, 2000);
+}
+function commit(f) { f(tasks); pending.push(f); render(); flush(); }
+function toggle(id) {
+  const at = now();
+  commit(ts => { const t = ts.find(t => t.id === id); if (!t) return; t.done = !t.done; if (t.done) t.doneAt = at; else delete t.doneAt; });
+}
+function add(e) {
+  e.preventDefault();
+  const title = $('title').value.trim(); if (!title) return;
+  $('title').value = '';
+  const t = { id: crypto.randomUUID().toUpperCase(), title, notes: '', quadrant: '1-1', project: '', day: day(), recurring: false, waiting: false, done: false, createdAt: now(), source: 'mobile' };
+  commit(ts => ts.push({ ...t }));
+}
+function setTok() { tok = localStorage.tok = $('tok').value.trim(); $('setup').style.display = 'none'; load().catch(fail); }
+const row = t => '<div class="t' + (t.done ? ' done' : '') + '" onclick="toggle(\'' + t.id + '\')"><div class="c"></div><div>' + esc(t.title)
+  + (t.waiting ? ' <span class="n">· waiting</span>' : '') + (t.notes ? '<div class="n">' + esc(t.notes) + '</div>' : '') + '</div></div>';
+function render() {
+  const open = tasks.filter(t => !t.done && isToday(t));
+  const done = tasks.filter(t => t.done && t.doneAt && day(new Date(t.doneAt)) === day());
+  let html = '';
+  for (const b of [...BLOCKS, '']) { const g = open.filter(t => (t.block || '') === b); if (g.length) html += '<h1>' + (b || 'Anytime') + '</h1>' + g.map(row).join(''); }
+  if (!open.length) html += '<h1>Today</h1><p class="n">Nothing left.</p>';
+  if (done.length) html += '<h1>Done today · ' + done.length + '</h1>' + done.map(row).join('');
+  $('list').innerHTML = html;
+}
+if (tok) load().catch(fail); else $('setup').style.display = 'block';
+document.addEventListener('visibilitychange', () => { if (!document.hidden && tok && !pending.length) load().catch(fail); });
+</script>
+</body>
+</html>
